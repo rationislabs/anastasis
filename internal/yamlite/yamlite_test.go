@@ -87,6 +87,7 @@ func TestParse(t *testing.T) {
 func TestParseErrors(t *testing.T) {
 	tests := []struct{ name, in, want string }{
 		{"tab indent", "a:\n\tb: 1\n", "2:1: tabs are not allowed for indentation"},
+		{"escape beyond unicode", "a: \"\\U80000000\"\n", "bad \\U escape"},
 		{"two documents", "a: 1\n---\nb: 2\n", "2:1: multiple documents are not supported"},
 		{"tag", "a: !!str 1\n", "1:4: tags are not supported"},
 		{"custom tag", "a: !reset []\n", "1:4: tags are not supported"},

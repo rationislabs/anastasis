@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -825,7 +826,7 @@ func quoted(s string) (string, int, error) {
 					return "", 0, fmt.Errorf(`bad \%c escape`, e)
 				}
 				r, err := strconv.ParseUint(s[i+1:i+1+size], 16, 32)
-				if err != nil {
+				if err != nil || r > unicode.MaxRune {
 					return "", 0, fmt.Errorf(`bad \%c escape`, e)
 				}
 				b = utf8.AppendRune(b, rune(r))
