@@ -1,7 +1,7 @@
 # Anastasis
 
-*Anastasis* (ἀνάστασις, Greek for "standing up again") is a container orchestrator for homelabs
-and small servers: what dies stands back up. It runs your services on rootless Podman and keeps
+*Anastasis* (ἀνάστασις, Greek for "resurrection") is a container orchestrator for homelabs
+and small servers: what dies comes back to life. It runs your services on rootless Podman and keeps
 them at the size you asked for, without a root daemon and without the weight of a full cluster
 platform.
 
