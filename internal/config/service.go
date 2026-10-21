@@ -31,7 +31,7 @@ func toService(project, name string, a at, dir string, vars, vols map[string]str
 	}
 	switch {
 	case a.has("build"):
-		return fail(errors.New("build: is not supported; push an image and use image:"))
+		return fail(errors.New("build is not supported; push an image and set image"))
 	case a.has("network_mode"):
 		return fail(errors.New("network_mode: is not supported; anastasis puts every service on one network per project"))
 	}

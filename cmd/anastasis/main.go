@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/rationislabs/anastasis/internal/api"
 	"github.com/rationislabs/anastasis/internal/lb"
@@ -40,10 +41,18 @@ commands:
 `
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "anastasis:", err)
-		os.Exit(1)
+	os.Exit(exitCode(run(os.Args[1:])))
+}
+
+func exitCode(err error) int {
+	if errors.Is(err, flag.ErrHelp) {
+		return 0 // the usage was asked for and printed
 	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "anastasis:", err)
+		return 1
+	}
+	return 0
 }
 
 func run(args []string) error {
@@ -79,7 +88,7 @@ func run(args []string) error {
 		return cl.Down(project, volumes)
 	case "scale":
 		if len(args) < 2 {
-			return errors.New("usage: anastasis scale <project> <service>=<n> ...")
+			return errors.New("usage: anastasis scale <project> <service>=<n> [<service>=<n>]")
 		}
 		scale, err := parseScale(args[1:])
 		if err != nil {
@@ -239,9 +248,22 @@ func parseScale(args []string) (map[string]int, error) {
 	return out, nil
 }
 
+// printable drops control characters, so text from containers and the
+// engine can never reach the terminal as escape codes.
+// ponytail: the rest of an escape sequence stays as plain text ("[2J").
+func printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
 func printStatus(w io.Writer, st reconcile.Status) {
+	clean := printable
 	if st.RuntimeError != "" {
-		fmt.Fprintf(w, "runtime unreachable: %s\n", st.RuntimeError)
+		fmt.Fprintf(w, "runtime unreachable: %s\n", clean(st.RuntimeError))
 	}
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "PROJECT\tSERVICE\tREADY\tOUTDATED\tPORT\tAUTO\tSTATE")
@@ -254,16 +276,16 @@ func printStatus(w io.Writer, st reconcile.Status) {
 		if s.Auto != "" {
 			auto = s.Auto
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%d/%d\t%d\t%s\t%s\t%s\n", s.Project, s.Service, s.Ready, s.Desired, s.Outdated, port, auto, serviceState(s))
+		fmt.Fprintf(tw, "%s\t%s\t%d/%d\t%d\t%s\t%s\t%s\n", clean(s.Project), clean(s.Service), s.Ready, s.Desired, s.Outdated, port, clean(auto), clean(serviceState(s)))
 	}
 	tw.Flush()
 	for _, s := range st.Services {
 		for _, warn := range s.Warnings {
-			fmt.Fprintf(w, "warning: %s/%s: %s\n", s.Project, s.Service, warn)
+			fmt.Fprintf(w, "warning: %s/%s: %s\n", clean(s.Project), clean(s.Service), clean(warn))
 		}
 	}
 	for _, warn := range st.Warnings {
-		fmt.Fprintf(w, "warning: %s\n", warn)
+		fmt.Fprintf(w, "warning: %s\n", clean(warn))
 	}
 }
 

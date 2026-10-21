@@ -12,6 +12,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"syscall"
@@ -101,9 +102,12 @@ func (s *Store) Get(name string) (ProjectState, bool) {
 func (s *Store) Up(p model.Project, source string) error {
 	return s.update(func(m map[string]*ProjectState) error {
 		ps := &ProjectState{Source: source, Current: p}
+		if err := volumeOwners(m, p); err != nil {
+			return err
+		}
 		if old, ok := m[p.Name]; ok {
 			if filepath.Dir(old.Source) != filepath.Dir(source) {
-				return fmt.Errorf("project %q is already registered from %s; give one of them a different top-level name:", p.Name, old.Source)
+				return fmt.Errorf("project %q is already registered from %s; give one of them a different top-level name", p.Name, old.Source)
 			}
 			prev := old.Current
 			ps.Previous = &prev
@@ -112,6 +116,22 @@ func (s *Store) Up(p model.Project, source string) error {
 		m[p.Name] = ps
 		return nil
 	})
+}
+
+// volumeOwners refuses p when another project already owns one of its
+// volumes: down --volumes on p would delete that project's data.
+func volumeOwners(m map[string]*ProjectState, p model.Project) error {
+	for name, other := range m {
+		if name == p.Name {
+			continue
+		}
+		for _, v := range p.Volumes {
+			if slices.Contains(other.Current.Volumes, v) {
+				return fmt.Errorf("volume %s belongs to project %q; mark it external: true in both projects to share it", v, name)
+			}
+		}
+	}
+	return nil
 }
 
 // Down unregisters a project.

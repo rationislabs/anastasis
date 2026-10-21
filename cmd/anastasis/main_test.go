@@ -68,3 +68,22 @@ func TestDefaultComposeFilePrefersJSON(t *testing.T) {
 		t.Fatalf("json and yaml: %q, want json first", got)
 	}
 }
+
+func TestHelpExitsZero(t *testing.T) {
+	if code := exitCode(run([]string{"-h"})); code != 0 {
+		t.Fatalf("-h exit code %d, want 0", code)
+	}
+	if code := exitCode(run([]string{"status", "-x"})); code != 1 {
+		t.Fatalf("bad command exit code %d, want 1", code)
+	}
+}
+
+// Text from containers must not reach the terminal as escape codes.
+func TestStatusSanitized(t *testing.T) {
+	var b strings.Builder
+	printStatus(&b, reconcile.Status{Services: []reconcile.ServiceStatus{{Project: "p", Service: "web",
+		Error: "boom\x1b]0;pwned\x07", Warnings: []string{"w\x1b[2J"}}}, Warnings: []string{"\x1b[31mred"}})
+	if strings.Contains(b.String(), "\x1b") {
+		t.Fatalf("escape codes in status output: %q", b.String())
+	}
+}

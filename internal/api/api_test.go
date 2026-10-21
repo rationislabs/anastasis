@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,5 +105,16 @@ func TestListenReplacesStaleSocket(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// One huge request must not run anastasis out of memory.
+func TestRequestBodyLimited(t *testing.T) {
+	h := handler(reconcile.New(nil, nil, nil))
+	body := strings.NewReader(`{"path":"/` + strings.Repeat("x", maxBody) + `"}`)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/up", body))
+	if rec.Code == http.StatusOK || !strings.Contains(rec.Body.String(), "too large") {
+		t.Fatalf("oversized request: %d %.200s", rec.Code, rec.Body.String())
 	}
 }

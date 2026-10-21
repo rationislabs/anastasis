@@ -256,3 +256,22 @@ func TestUpAcceptsOtherFileInSameDirectory(t *testing.T) {
 		t.Fatalf("source %q, previous %v; want the new file and the old config kept", ps.Source, ps.Previous)
 	}
 }
+
+// A project cannot claim another project's volume: down --volumes on it
+// would delete the other project's data.
+func TestUpRefusesAnotherProjectsVolume(t *testing.T) {
+	s, _ := open(t)
+	b := project("nginx:1")
+	b.Name, b.Volumes = "b", []string{"b_data"}
+	if err := s.Up(b, "/b/compose.json"); err != nil {
+		t.Fatal(err)
+	}
+	a := project("nginx:1")
+	a.Name, a.Volumes = "a", []string{"b_data"}
+	if err := s.Up(a, "/a/compose.json"); err == nil || !strings.Contains(err.Error(), "b_data") || !strings.Contains(err.Error(), "external") {
+		t.Fatalf("Up = %v, want a refusal naming the volume and external: true", err)
+	}
+	if err := s.Up(b, "/b/compose.json"); err != nil {
+		t.Fatalf("owner up again: %v", err)
+	}
+}

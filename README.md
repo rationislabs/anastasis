@@ -169,7 +169,13 @@ name services of the project.
   run `anastasis down` before moving a project. Another file in the same
   directory is the same project, so `compose.yaml` can become `compose.json`
   with a plain `anastasis up`.
-- **`down --volumes`** removes the project's named volumes, never `external:` ones.
+- **`down --volumes`** removes the project's named volumes, never `external:` ones. A volume
+  belongs to one project: `up` refuses a project that names another project's volume. To share
+  one, mark it `external: true` in both projects.
+- **A project file is trusted like a script.** Bind mounts of any host path and `cap_add` are
+  passed to Podman as written; rootless Podman limits them to what your user can do, but a bind
+  of your home directory can still read your files. `privileged`, `devices` and `pid` are
+  rejected.
 
 - **Healthchecks need a systemd user session** on rootless Podman. Without
   `loginctl enable-linger`, replicas stay `starting` and never get traffic;

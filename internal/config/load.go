@@ -202,7 +202,7 @@ func projectName(tree any, dir string, vars map[string]string) (string, error) {
 	if name := normalizeName(filepath.Base(dir)); name != "" {
 		return name, nil
 	}
-	return "", errors.New("cannot derive a project name from the directory; set name:")
+	return "", errors.New("cannot derive a project name from the directory; set the top-level name")
 }
 
 // normalizeName lowercases s and drops characters outside [a-z0-9_-] and

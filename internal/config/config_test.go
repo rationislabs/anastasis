@@ -269,7 +269,7 @@ func TestHashIgnoresReplicas(t *testing.T) {
 func TestRejects(t *testing.T) {
 	const head = "name: t\nservices:\n  web:\n    image: nginx\n"
 	tests := []struct{ name, yaml, want string }{
-		{"build", "name: t\nservices:\n  web:\n    build: .\n", "build: is not supported"},
+		{"build", "name: t\nservices:\n  web:\n    build: .\n", "build is not supported"},
 		{"no image", "name: t\nservices:\n  web:\n    user: x\n", "image: is required"},
 		{"ports with replicas", head + "    ports: [\"80:80\"]\n    deploy: {replicas: 2}\n", "move it to x-anastasis.expose"},
 		{"ports with start-first", head + "    ports: [\"80:80\"]\n    deploy: {update_config: {order: start-first}}\n", "start-first"},

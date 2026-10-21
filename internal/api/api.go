@@ -122,8 +122,14 @@ func handler(c *reconcile.Controller) http.Handler {
 	return mux
 }
 
+// maxBody caps a request body.
+const maxBody = 16 << 20
+
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(v); err != nil {
+		if errors.As(err, new(*http.MaxBytesError)) {
+			err = fmt.Errorf("request too large (over %d MiB)", maxBody>>20)
+		}
 		reply(w, nil, fmt.Errorf("bad request: %w", err))
 		return false
 	}
