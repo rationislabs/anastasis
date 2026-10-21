@@ -1,0 +1,52 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false # no modules, so no go.sum to key a cache on
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      # Anastasis has no third-party Go modules; keep it that way.
+      - run: test -z "$(go list -m all | tail -n +2)"
+      - run: go test -race ./...
+
+  integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false # no modules, so no go.sum to key a cache on
+      # Rootless Podman schedules healthchecks with systemd user timers,
+      # so the runner user needs a systemd user session.
+      - name: Start a systemd user session and the Podman API
+        run: |
+          sudo loginctl enable-linger "$USER"
+          export XDG_RUNTIME_DIR=/run/user/$(id -u)
+          for i in $(seq 30); do [ -S "$XDG_RUNTIME_DIR/bus" ] && break; sleep 1; done
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus" >> "$GITHUB_ENV"
+          systemctl --user start podman.socket
+          podman version
+      - name: Check healthchecks run
+        run: |
+          podman run -d --name hc --health-cmd true --health-interval 1s docker.io/library/nginx:1.27-alpine
+          for i in $(seq 30); do
+            podman ps --filter health=healthy --format '{{.Names}}' | grep -qx hc && exit 0
+            sleep 1
+          done
+          echo "healthchecks are not running: no systemd user session?"
+          exit 1
+      - name: Integration tests
+        run: go test -tags integration -count=1 -timeout 15m -v ./integration/

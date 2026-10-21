@@ -1,0 +1,23 @@
+services:
+  app:
+    image: docker.io/binwiederhier/ntfy:v2.11.0
+    restart: unless-stopped
+    container_name: ntfy
+    env_file: app.env
+    command: serve
+    volumes:
+      - data:/var/cache/ntfy
+      - ./config:/etc/ntfy:ro
+    labels:
+      homelab.stack: ntfy
+    depends_on:
+      - cache
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/v1/health"]
+      interval: 30s
+      retries: 3
+  cache:
+    image: docker.io/library/redis:7-alpine
+    restart: always
+volumes:
+  data:

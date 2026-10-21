@@ -1,0 +1,261 @@
+{
+  "homelab": {
+    "source": "/c/homelab.yaml",
+    "current": {
+      "name": "homelab",
+      "services": {
+        "app": {
+          "project": "homelab",
+          "name": "app",
+          "hash": "17d90ab4f261",
+          "replicas": 1,
+          "update": {
+            "parallelism": 1,
+            "delay": 0,
+            "monitor": 30000000000,
+            "order": "start-first",
+            "failureAction": "pause"
+          },
+          "stopGrace": 10000000000,
+          "config": {
+            "restart": "unless-stopped",
+            "container_name": "ntfy",
+            "command": [
+              "serve"
+            ],
+            "entrypoint": null,
+            "environment": {
+              "TZ": "Europe/Bratislava"
+            },
+            "env_file": [
+              {
+                "path": "/srv/fixtures/homelab/app.env"
+              }
+            ],
+            "image": "docker.io/binwiederhier/ntfy:v2.11.0",
+            "labels": {
+              "homelab.stack": "ntfy"
+            },
+            "networks": {
+              "default": null
+            },
+            "volumes": [
+              {
+                "type": "volume",
+                "source": "homelab_data",
+                "target": "/var/cache/ntfy",
+                "volume": {}
+              },
+              {
+                "type": "bind",
+                "source": "/srv/fixtures/homelab/config",
+                "target": "/etc/ntfy",
+                "read_only": true,
+                "bind": {}
+              }
+            ],
+            "depends_on": {
+              "cache": {
+                "condition": "service_started",
+                "required": true
+              }
+            },
+            "healthcheck": {
+              "test": [
+                "CMD",
+                "wget",
+                "-qO-",
+                "http://localhost/v1/health"
+              ],
+              "interval": "30s",
+              "retries": 3
+            }
+          }
+        },
+        "cache": {
+          "project": "homelab",
+          "name": "cache",
+          "hash": "c5c112be3b11",
+          "replicas": 1,
+          "update": {
+            "parallelism": 1,
+            "delay": 0,
+            "monitor": 30000000000,
+            "order": "start-first",
+            "failureAction": "pause"
+          },
+          "stopGrace": 10000000000,
+          "config": {
+            "restart": "always",
+            "command": null,
+            "entrypoint": null,
+            "image": "docker.io/library/redis:7-alpine",
+            "networks": {
+              "default": null
+            }
+          }
+        }
+      },
+      "volumes": [
+        "homelab_data"
+      ]
+    },
+    "version": 1
+  },
+  "spec": {
+    "source": "/c/spec.yaml",
+    "current": {
+      "name": "spec",
+      "services": {
+        "web": {
+          "project": "spec",
+          "name": "web",
+          "hash": "931c9d9b5a7a",
+          "replicas": 1,
+          "update": {
+            "parallelism": 1,
+            "delay": 0,
+            "monitor": 30000000000,
+            "order": "start-first",
+            "failureAction": "pause"
+          },
+          "expose": {
+            "hostPort": 8000,
+            "containerPort": 80
+          },
+          "stopGrace": 10000000000,
+          "config": {
+            "deploy": {
+              "resources": {
+                "limits": {
+                  "cpus": 0.5,
+                  "memory": "268435456"
+                }
+              },
+              "placement": {}
+            },
+            "cap_drop": [
+              "ALL"
+            ],
+            "command": [
+              "nginx",
+              "-g",
+              "daemon off;"
+            ],
+            "entrypoint": null,
+            "environment": {
+              "A": "1"
+            },
+            "image": "docker.io/library/nginx:1.27-alpine",
+            "labels": {
+              "anastasis.project": "spoofed",
+              "team": "home"
+            },
+            "networks": {
+              "default": null
+            },
+            "volumes": [
+              {
+                "type": "volume",
+                "source": "spec_data",
+                "target": "/data",
+                "volume": {}
+              }
+            ],
+            "healthcheck": {
+              "test": [
+                "CMD",
+                "wget",
+                "-qO-",
+                "http://127.0.0.1/"
+              ],
+              "interval": "5s",
+              "retries": 3
+            }
+          }
+        }
+      },
+      "volumes": [
+        "spec_data"
+      ]
+    },
+    "version": 1
+  },
+  "weather": {
+    "source": "/c/weather.yaml",
+    "current": {
+      "name": "weather",
+      "services": {
+        "web": {
+          "project": "weather",
+          "name": "web",
+          "hash": "482ae5d59b76",
+          "replicas": 3,
+          "update": {
+            "parallelism": 1,
+            "delay": 5000000000,
+            "monitor": 30000000000,
+            "order": "start-first",
+            "failureAction": "pause"
+          },
+          "expose": {
+            "hostPort": 8000,
+            "containerPort": 8080
+          },
+          "sticky": true,
+          "stopGrace": 10000000000,
+          "config": {
+            "deploy": {
+              "replicas": 3,
+              "update_config": {
+                "parallelism": 1,
+                "delay": "5s",
+                "order": "start-first"
+              },
+              "resources": {},
+              "placement": {}
+            },
+            "command": null,
+            "entrypoint": null,
+            "image": "ghcr.io/rationislabs/weather-live-dashboard:1.4.0",
+            "networks": {
+              "default": null
+            },
+            "healthcheck": {
+              "test": [
+                "CMD",
+                "wget",
+                "-qO-",
+                "http://localhost:8080/health"
+              ],
+              "interval": "5s"
+            }
+          }
+        },
+        "worker": {
+          "project": "weather",
+          "name": "worker",
+          "hash": "8645093fd56e",
+          "replicas": 1,
+          "update": {
+            "parallelism": 1,
+            "delay": 0,
+            "monitor": 30000000000,
+            "order": "start-first",
+            "failureAction": "pause"
+          },
+          "stopGrace": 10000000000,
+          "config": {
+            "command": null,
+            "entrypoint": null,
+            "image": "example/worker:2.0",
+            "networks": {
+              "default": null
+            }
+          }
+        }
+      }
+    },
+    "version": 1
+  }
+}

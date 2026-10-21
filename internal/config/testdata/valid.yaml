@@ -1,0 +1,15 @@
+name: weather
+services:
+  web:
+    image: ghcr.io/rationislabs/weather-live-dashboard:1.4.0
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 5s
+    deploy:
+      replicas: 3
+      update_config: { parallelism: 1, order: start-first, delay: 5s }
+    x-anastasis:
+      expose: 8000:8080
+      sticky: true
+  worker:
+    image: example/worker:2.0

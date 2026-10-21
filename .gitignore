@@ -1,0 +1,9 @@
+# build output
+/anastasis
+
+# AI tooling stays out of the repo
+.claude/
+CLAUDE.md
+.serena/
+docs/superpowers/
+.superpowers/
