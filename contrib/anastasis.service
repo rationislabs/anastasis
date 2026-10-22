@@ -7,6 +7,15 @@ After=podman.socket
 ExecStart=%h/.local/bin/anastasis serve
 Restart=always
 RestartSec=1
+# A user unit: it runs as you, so User= does not apply. No ProtectHome or
+# ProtectSystem: anastasis reads compose files and creates bind-mount
+# sources wherever a project keeps them.
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+RestrictNamespaces=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=default.target

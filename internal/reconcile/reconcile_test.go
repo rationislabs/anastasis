@@ -280,3 +280,15 @@ func TestAutoscaleInitialCountsDeadReplicas(t *testing.T) {
 		t.Fatalf("initial desired = %d, want 3", n)
 	}
 }
+
+// Browsers keep cookies per host, not per port: two projects' sticky "web"
+// services must not share one cookie and keep moving each other's clients.
+func TestStickyCookieNamesTheProject(t *testing.T) {
+	if a, b := lbName("shop/web"), lbName("blog/web"); a == b || a != "shop.web" {
+		t.Fatalf("lbName = %q, %q", a, b)
+	}
+	// Underscores are legal in both names: "_" as the separator would make these one cookie.
+	if lbName("a_b/c") == lbName("a/b_c") {
+		t.Fatal("two services share a cookie name")
+	}
+}

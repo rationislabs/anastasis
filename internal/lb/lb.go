@@ -230,6 +230,12 @@ type listener struct {
 
 type handlerBox struct{ http.Handler }
 
+// readTimeout is how long a request body may stall: a client that stops
+// sending would otherwise hold a connection, and count as in flight, for as
+// long as it likes. It bounds each wait for the next bytes, not the whole
+// body, so a large upload on a slow line still arrives.
+var readTimeout = 30 * time.Second
+
 // New returns an LB that listens on addr ("" for all interfaces).
 func New(addr string) *LB { return &LB{addr: addr, listeners: map[string]*listener{}} }
 
@@ -253,7 +259,12 @@ func (l *LB) Listen(key string, port int, h http.Handler) error {
 	ln := &listener{port: port}
 	ln.h.Store(&handlerBox{h})
 	ln.srv = &http.Server{
-		Handler:           http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { ln.h.Load().ServeHTTP(w, r) }),
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rc := http.NewResponseController(w)
+			rc.SetReadDeadline(time.Now().Add(readTimeout))
+			r.Body = &idleBody{r.Body, rc}
+			ln.h.Load().ServeHTTP(w, r)
+		}),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
@@ -292,4 +303,16 @@ func (l *LB) Shutdown() {
 		ln.srv.Close()
 		delete(l.listeners, key)
 	}
+}
+
+// idleBody moves the read deadline forward before every read of a request
+// body: the deadline catches a stalled client, not a slow but steady one.
+type idleBody struct {
+	io.ReadCloser
+	rc *http.ResponseController
+}
+
+func (b *idleBody) Read(p []byte) (int, error) {
+	b.rc.SetReadDeadline(time.Now().Add(readTimeout))
+	return b.ReadCloser.Read(p)
 }

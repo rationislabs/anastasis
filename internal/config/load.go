@@ -22,12 +22,33 @@ import (
 	"github.com/rationislabs/anastasis/internal/yamlite"
 )
 
+// maxFileBytes caps a project file: a compose file is a few KB, and the parser
+// holds all of it in memory.
+const maxFileBytes = 4 << 20
+
+// readCapped reads path, refusing a file over maxFileBytes before parsing it.
+func readCapped(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxFileBytes {
+		return nil, fmt.Errorf("%s: larger than %d MiB; is it a compose file?", path, maxFileBytes>>20)
+	}
+	return data, nil
+}
+
 // Load reads the project file at path. env ("KEY=value") and the .env file
 // next to it supply ${VAR} values; env wins. Files ending in .json are read
 // as JSON, anything else as YAML. ctx is unused: loading reads local files
 // only.
 func Load(ctx context.Context, path string, env []string) (*model.Project, error) {
-	data, err := os.ReadFile(path)
+	data, err := readCapped(path)
 	if err != nil {
 		return nil, err
 	}
@@ -48,8 +69,7 @@ func Load(ctx context.Context, path string, env []string) (*model.Project, error
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	vars["COMPOSE_PROJECT_NAME"] = name
-	left := maxValues
-	if tree, err = interpolate(tree, vars, "", &left); err != nil {
+	if tree, err = interpolate(tree, vars, "", newBudget()); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	p, err := project(at{v: tree}, name, dir, vars)
@@ -178,6 +198,15 @@ func variables(dir string, env []string) (map[string]string, error) {
 
 var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
+// serviceName is what Compose accepts; a name becomes part of container names
+// (after the project's), URL paths and the sticky cookie's name, so a name of
+// dots only (".", "..") is refused as well.
+var serviceName = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
+// volumeName is the engine's rule: a volume name is one path segment of its API,
+// used as it is.
+var volumeName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
 // projectName picks the name the way compose-go does: COMPOSE_PROJECT_NAME
 // (which must already be valid), else the file's name: (interpolated and
 // normalized), else the directory name, normalized.
@@ -249,6 +278,9 @@ func project(root at, name, dir string, vars map[string]string) (*model.Project,
 	}
 	exposed := map[int]string{}
 	for _, sn := range slices.Sorted(maps.Keys(svcs)) {
+		if !serviceName.MatchString(sn) || strings.Trim(sn, ".") == "" {
+			return nil, fmt.Errorf("service %q: name must match %s", sn, serviceName)
+		}
 		svc, err := toService(name, sn, at{v: svcs[sn]}, dir, vars, vols)
 		if err == nil {
 			err = checkDependsOn(at{v: svcs[sn]}.key("depends_on"), svcs)
@@ -303,6 +335,9 @@ func volumes(a at, project string) (map[string]string, []string, error) {
 			name = k
 		default:
 			name = project + "_" + k
+		}
+		if !volumeName.MatchString(name) { // one path segment in the engine's API
+			return nil, nil, fmt.Errorf("volume %q: name must match %s", k, volumeName)
 		}
 		full[k] = name
 		if !ext {

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rationislabs/anastasis/internal/model"
 )
@@ -36,8 +37,7 @@ func TestExpand(t *testing.T) {
 func TestInterpolateCopies(t *testing.T) {
 	shared := map[string]any{"a": "$$x"}
 	tree := map[string]any{"one": shared, "two": shared}
-	left := maxValues
-	out, err := interpolate(tree, nil, "", &left)
+	out, err := interpolate(tree, nil, "", newBudget())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,4 +155,65 @@ func fmtVolume(v model.Volume) string {
 		s = strings.Replace(s, fmt.Sprintf("%p", v.Bind), fmt.Sprintf("&%+v", *v.Bind), 1)
 	}
 	return s
+}
+
+// Nested aliases that stay under the value cap can still copy gigabytes: one
+// 1 MB string used 100 x 100 times is 10 GB of copies. The byte budget stops
+// that before the memory goes. Built as shared Go values, the shape aliases parse to.
+func TestInterpolateStopsAtTheByteBudget(t *testing.T) {
+	big := strings.Repeat("x", 1<<20)
+	level1 := make([]any, 100)
+	for i := range level1 {
+		level1[i] = big
+	}
+	level2 := make([]any, 100)
+	for i := range level2 {
+		level2[i] = level1
+	}
+	b := newBudget()
+	_, err := interpolate(map[string]any{"bomb": level2}, nil, "", b)
+	if err == nil || !strings.Contains(err.Error(), "64 MiB") {
+		t.Fatalf("err = %v, want the 64 MiB budget", err)
+	}
+}
+
+func TestReadEnvFileRefusesAHugeFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "big.env")
+	os.WriteFile(path, []byte("A="+strings.Repeat("x", maxFileBytes)), 0o600)
+	if _, err := readEnvFile(path, nil); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("err = %v, want the size cap", err)
+	}
+}
+
+// Variables expand into each other: a few hundred bytes of .env can name gigabytes.
+func TestEnvFileExpansionIsBounded(t *testing.T) {
+	lines := []string{"L0=" + strings.Repeat("x", 1000)}
+	for i := 1; i <= 6; i++ {
+		lines = append(lines, fmt.Sprintf("L%d=%s", i, strings.Repeat(fmt.Sprintf("${L%d}", i-1), 10)))
+	}
+	path := filepath.Join(t.TempDir(), "bomb.env")
+	os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600)
+	if _, err := readEnvFile(path, nil); err == nil || !strings.Contains(err.Error(), "MiB") {
+		t.Fatalf("err = %v, want the expansion limit", err)
+	}
+}
+
+func TestInterpolateCountsExpandedBytes(t *testing.T) {
+	vars := map[string]string{"X": strings.Repeat("x", 1<<20)}
+	tree := map[string]any{"a": strings.Repeat("${X}", 100)} // 400 bytes that become 100 MiB
+	if _, err := interpolate(tree, vars, "", newBudget()); err == nil || !strings.Contains(err.Error(), "MiB") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestAnUnterminatedQuoteInAnEnvFileFailsFast(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "open.env")
+	os.WriteFile(path, []byte("A=\"open\n"+strings.Repeat("line\n", 40_000)), 0o600)
+	start := time.Now()
+	if _, err := readEnvFile(path, nil); err == nil || !strings.Contains(err.Error(), "unterminated") {
+		t.Fatalf("err = %v", err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("took %v", d)
+	}
 }

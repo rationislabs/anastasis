@@ -603,11 +603,16 @@ func (c *Controller) autoscaled(key string, svc model.Service, m *memory, reps [
 	return n, fmt.Sprintf("%d→%d (%s)", len(ready), n, reason), warning
 }
 
+// lbName names a service's balancer, and so its sticky cookie, after the
+// project too: browsers share cookies across ports, so two projects' "web"
+// services must not share one. "." separates: "_" occurs in both names.
+func lbName(key string) string { return strings.ReplaceAll(key, "/", ".") } // no project name has a dot
+
 // publish points the service's load balancer at its ready replicas and
 // makes sure it listens. A failed listen is retried on the next pass.
 func (c *Controller) publish(key string, svc model.Service, m *memory, reps []model.Replica, removing map[string]bool) error {
 	if m.lb == nil || m.lb.Sticky() != svc.Sticky {
-		m.lb = lb.NewService(svc.Name, svc.Sticky)
+		m.lb = lb.NewService(lbName(key), svc.Sticky)
 	}
 	var bs []lb.Backend
 	for _, r := range reps {

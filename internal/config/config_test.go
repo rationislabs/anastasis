@@ -84,7 +84,7 @@ func TestLoadHomelabStyle(t *testing.T) {
 		t.Fatalf("name = %q, want directory name", p.Name)
 	}
 	app := p.Services["app"]
-	if tz := app.Config.Environment["TZ"]; tz != "Europe/Bratislava" {
+	if tz := app.Config.Environment["TZ"]; tz != "UTC" {
 		t.Fatalf("env_file not applied: %v", app.Config.Environment)
 	}
 	var sources []string
@@ -489,5 +489,77 @@ func TestNestedAliasesAreCapped(t *testing.T) {
 	}
 	if d := time.Since(start); d > 5*time.Second {
 		t.Fatalf("took %v; nested aliases must be rejected before they expand", d)
+	}
+}
+
+// A compose file is a few KB; one far past that is refused before it is parsed.
+func TestLoadRefusesAHugeFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "compose.json")
+	body := `{"services": {"a": {"image": "x", "labels": {"pad": "` + strings.Repeat("x", maxFileBytes) + `"}}}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(context.Background(), path, nil)
+	if err == nil || !strings.Contains(err.Error(), "larger than 4 MiB") {
+		t.Fatalf("err = %v, want the size cap", err)
+	}
+}
+
+// The caps leave room for real projects: 500 services in about 1 MB load.
+func TestLoadALargeLegitimateFile(t *testing.T) {
+	svcs := make([]string, 500)
+	for i := range svcs {
+		svcs[i] = fmt.Sprintf(`"s%d": {"image": "docker.io/library/nginx:1.27", "labels": {"note": "%s"}}`, i, strings.Repeat("n", 2000))
+	}
+	path := filepath.Join(t.TempDir(), "compose.json")
+	if err := os.WriteFile(path, []byte(`{"name": "big", "services": {`+strings.Join(svcs, ",")+`}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Load(context.Background(), path, nil)
+	if err != nil || len(p.Services) != 500 {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestNegativeDurationsAreRefused(t *testing.T) {
+	for _, field := range []string{`"stop_grace_period": "-5s"`, `"healthcheck": {"test": ["CMD", "true"], "interval": "-1s"}`} {
+		_, err := loadAs(t, "compose.json", `{"services": {"web": {"image": "x", `+field+`}}}`, nil, nil)
+		if err == nil || !strings.Contains(err.Error(), "must not be negative") {
+			t.Errorf("%s: err = %v", field, err)
+		}
+	}
+}
+
+func TestDurationsTooLongAreRefusedNotWrapped(t *testing.T) {
+	// 20000w wrapped around int64 and was reported as negative; a week count past int
+	// was read as 0.
+	for _, v := range []string{"20000w", "999999999999999999999d", "106000d300000h", "3000000h", "9999999999999999999s"} {
+		_, err := loadAs(t, "compose.json", `{"services": {"web": {"image": "x", "stop_grace_period": "`+v+`"}}}`, nil, nil)
+		if err == nil || !strings.Contains(err.Error(), "too long") {
+			t.Errorf("%s: err = %v", v, err)
+		}
+	}
+}
+
+func TestServiceNamesMustBeNames(t *testing.T) {
+	for _, name := range []string{"Web App", "a/b", "", ".", ".."} {
+		_, err := loadAs(t, "compose.json", `{"services": {"`+name+`": {"image": "x"}}}`, nil, nil)
+		if err == nil || !strings.Contains(err.Error(), "name must match") {
+			t.Errorf("%q: err = %v", name, err)
+		}
+	}
+	// What Compose accepts: a leading _, - or . too (the project prefix starts every
+	// container name).
+	for _, name := range []string{"web.v2_x-1", "_worker", "-x", ".hidden"} {
+		if _, err := loadAs(t, "compose.json", `{"services": {"`+name+`": {"image": "x"}}}`, nil, nil); err != nil {
+			t.Errorf("%q: %v", name, err)
+		}
+	}
+}
+
+func TestVolumeNamesMustBeNames(t *testing.T) {
+	_, err := loadAs(t, "compose.json", `{"services": {"web": {"image": "x", "volumes": ["data:/d"]}}, "volumes": {"data": {"name": "../containers/x"}}}`, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "name must match") {
+		t.Fatalf("err = %v", err)
 	}
 }

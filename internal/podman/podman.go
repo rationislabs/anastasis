@@ -52,29 +52,43 @@ type Client struct {
 	version string // set once the engine answered GET /version
 }
 
+// versionTimeout bounds one GET /version probe: the events loop calls prefix
+// with a context that has no deadline.
+var versionTimeout = 5 * time.Second
+
 // prefix returns the versioned path prefix, asking the engine for its
 // minimum API version until it has answered once.
 func (c *Client) prefix(ctx context.Context) string {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.version != "" {
-		return "/v" + c.version
+	known := c.version
+	c.mu.Unlock()
+	if known != "" {
+		return "/v" + known
 	}
+	// The probe runs outside the lock: an engine that never answers must not
+	// hold up every other call waiting on c.mu.
+	ctx, cancel := context.WithTimeout(ctx, versionTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://podman/version", nil)
 	if err != nil {
 		return "/v" + baseVersion
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return "/v" + baseVersion // engine down: try again on the next call
+		return "/v" + baseVersion // engine down or stuck: try again on the next call
 	}
 	defer resp.Body.Close()
 	var v struct {
 		MinAPIVersion string `json:"MinAPIVersion"`
 	}
-	c.version = baseVersion
+	found := baseVersion
 	if resp.StatusCode == http.StatusOK && json.NewDecoder(resp.Body).Decode(&v) == nil && newer(v.MinAPIVersion, baseVersion) {
-		c.version = v.MinAPIVersion
+		found = v.MinAPIVersion
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.version == "" { // the first answer wins; every answer is the same engine's
+		c.version = found
 	}
 	return "/v" + c.version
 }
@@ -420,7 +434,7 @@ func splitRef(ref string) (name, tag string) {
 }
 
 func (c *Client) NetworkExists(ctx context.Context, name string) (bool, error) {
-	return c.exists(ctx, "/networks/"+name)
+	return c.exists(ctx, "/networks/"+url.PathEscape(name))
 }
 
 func (c *Client) CreateNetwork(ctx context.Context, name string, labels map[string]string) error {
@@ -432,11 +446,11 @@ func (c *Client) CreateNetwork(ctx context.Context, name string, labels map[stri
 }
 
 func (c *Client) RemoveNetwork(ctx context.Context, name string) error {
-	return c.call(ctx, http.MethodDelete, "/networks/"+name, nil, nil, nil)
+	return c.call(ctx, http.MethodDelete, "/networks/"+url.PathEscape(name), nil, nil, nil)
 }
 
 func (c *Client) RemoveVolume(ctx context.Context, name string) error {
-	return c.call(ctx, http.MethodDelete, "/volumes/"+name, nil, nil, nil)
+	return c.call(ctx, http.MethodDelete, "/volumes/"+url.PathEscape(name), nil, nil, nil)
 }
 
 // Event is one engine event; anastasis only needs to know one happened.

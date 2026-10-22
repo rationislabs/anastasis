@@ -375,3 +375,91 @@ func TestIDEscaped(t *testing.T) {
 		t.Fatalf("path = %q", got.path)
 	}
 }
+
+// An engine that accepts connections but never answers /version (podman's
+// service stuck on its storage lock) must not wedge every other call behind
+// the client's mutex: each probe gives up after versionTimeout.
+func TestAStuckVersionProbeBlocksNoOtherCall(t *testing.T) {
+	old := versionTimeout
+	versionTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { versionTimeout = old })
+
+	dir, err := os.MkdirTemp("", "pm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "s")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stuck := make(chan struct{})
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/version" {
+			select {
+			case <-stuck:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		io.WriteString(w, "[]")
+	}))
+	srv.Listener.Close()
+	srv.Listener = ln
+	srv.Start()
+	t.Cleanup(func() { close(stuck); srv.Close() })
+
+	c := New(sock)
+	go c.prefix(context.Background()) // the events loop: no deadline of its own
+	time.Sleep(50 * time.Millisecond)
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.ListContainers(ctx, "x")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ListContainers: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ListContainers waited on the stuck /version probe")
+	}
+}
+
+// A name is one path segment: "../containers/x" must not walk to another
+// endpoint of the engine.
+func TestNamesAreEscapedInTheURLPath(t *testing.T) {
+	uris := make(chan string, 4)
+	dir, err := os.MkdirTemp("", "pm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "s")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/version" {
+			io.WriteString(w, `{"MinAPIVersion":"1.24"}`)
+			return
+		}
+		uris <- r.RequestURI
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	srv.Listener.Close()
+	srv.Listener = ln
+	srv.Start()
+	t.Cleanup(srv.Close)
+	c := New(sock)
+	c.RemoveVolume(ctx, "../containers/x")
+	c.RemoveNetwork(ctx, "../containers/y")
+	for _, want := range []string{"/v1.41/volumes/..%2Fcontainers%2Fx", "/v1.41/networks/..%2Fcontainers%2Fy"} {
+		if got := <-uris; got != want {
+			t.Errorf("request URI = %q, want %q", got, want)
+		}
+	}
+}

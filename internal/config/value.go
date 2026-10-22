@@ -2,8 +2,10 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"regexp"
 	"slices"
 	"strconv"
@@ -175,8 +177,14 @@ func (a at) duration() (model.Duration, error) {
 		return 0, nil
 	case string:
 		d, err := parseDuration(v)
+		if errors.Is(err, errTooLong) {
+			return 0, a.errorf("a duration too long: it must be under %d days, got %q", maxDays, v)
+		}
 		if err != nil {
 			return 0, a.errorf("want a duration like 5s, 1m30s or 1d, got %q", v)
+		}
+		if d < 0 {
+			return 0, a.errorf("a duration must not be negative, got %q", v)
 		}
 		return model.Duration(d), nil
 	}
@@ -184,6 +192,15 @@ func (a at) duration() (model.Duration, error) {
 }
 
 var weeksDays = regexp.MustCompile(`^(?:([0-9]+)w)?(?:([0-9]+)d)?`)
+
+// maxDays is the longest duration an int64 of nanoseconds holds, in whole days.
+const maxDays = math.MaxInt64 / int64(24*time.Hour)
+
+var errTooLong = errors.New("duration too long")
+
+// goDuration is time.ParseDuration's syntax: when it matches and parsing still
+// fails, the number did not fit.
+var goDuration = regexp.MustCompile(`^[-+]?(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:ns|us|µs|μs|ms|s|m|h))+$`)
 
 // parseDuration is time.ParseDuration plus leading w (7 days) and d (24h)
 // units, as Compose accepts: 1w2d3h.
@@ -194,12 +211,28 @@ func parseDuration(s string) (time.Duration, error) {
 	if rest := s[len(m[0]):]; rest != "" || m[0] == "" {
 		var err error
 		if d, err = time.ParseDuration(rest); err != nil {
+			if goDuration.MatchString(rest) {
+				return 0, errTooLong
+			}
 			return 0, err
 		}
 	}
-	w, _ := strconv.Atoi(m[1])
-	days, _ := strconv.Atoi(m[2])
-	return d + time.Duration(w*7+days)*24*time.Hour, nil
+	var days int64
+	for i, per := range []int64{7, 1} {
+		if m[i+1] == "" {
+			continue
+		}
+		n, err := strconv.ParseInt(m[i+1], 10, 64)
+		if err != nil || n > maxDays/per || days+n*per > maxDays {
+			return 0, errTooLong
+		}
+		days += n * per
+	}
+	whole := time.Duration(days) * 24 * time.Hour
+	if d > 0 && whole > math.MaxInt64-d {
+		return 0, errTooLong
+	}
+	return d + whole, nil
 }
 
 // size reads a byte count: a number, or a string like "256m".

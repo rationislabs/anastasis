@@ -14,17 +14,27 @@ import (
 	"github.com/rationislabs/anastasis/internal/model"
 )
 
-// maxValues caps the values interpolate copies. The parsed tree shares an
-// aliased value, but the copy expands every use, so nested aliases (a
-// "billion laughs" file) would grow exponentially.
-const maxValues = 100_000
+// maxValues and maxBytes cap what interpolate copies. The parsed tree shares
+// an aliased value, but the copy expands every use, so nested aliases (a
+// "billion laughs" file) would grow exponentially: in values, or, with few
+// values, in bytes (one 1 MB string used 10,000 times).
+const (
+	maxValues = 100_000
+	maxBytes  = 64 << 20
+)
+
+var errTooBig = fmt.Errorf("values expand to more than %d MiB; check for nested aliases or variables", maxBytes>>20)
+
+// budget is what interpolate may still copy.
+type budget struct{ values, bytes int }
+
+func newBudget() *budget { return &budget{maxValues, maxBytes} }
 
 // interpolate returns a copy of v with variables expanded in every string.
 // It copies instead of editing in place: YAML aliases share one value, and
 // expanding a shared string twice would turn $$ into $ and then expand it.
-// left is how many more values it may copy, out of maxValues.
-func interpolate(v any, vars map[string]string, at string, left *int) (any, error) {
-	if *left--; *left < 0 {
+func interpolate(v any, vars map[string]string, at string, left *budget) (any, error) {
+	if left.values--; left.values < 0 {
 		return nil, fmt.Errorf("more than %d values once aliases are expanded; check for nested YAML aliases", maxValues)
 	}
 	switch t := v.(type) {
@@ -35,6 +45,9 @@ func interpolate(v any, vars map[string]string, at string, left *int) (any, erro
 				return nil, err
 			}
 			return nil, fmt.Errorf("%s: %w", at, err)
+		}
+		if left.bytes -= len(s); left.bytes < 0 { // what it expands to, not what it says
+			return nil, errTooBig
 		}
 		return s, nil
 	case map[string]any:
@@ -95,6 +108,9 @@ func expand(s string, vars map[string]string) (string, error) {
 			}
 			b.WriteString(r)
 			i = end
+			if b.Len() > maxBytes { // variables naming variables: a few bytes can name gigabytes
+				return "", errTooBig
+			}
 		case isNameStart(c):
 			j := i + 1
 			for j < len(s) && isNameChar(s[j]) {
@@ -102,6 +118,9 @@ func expand(s string, vars map[string]string) (string, error) {
 			}
 			b.WriteString(vars[s[i+1:j]])
 			i = j - 1
+			if b.Len() > maxBytes {
+				return "", errTooBig
+			}
 		default:
 			b.WriteByte('$')
 		}
@@ -182,7 +201,7 @@ func substitute(expr string, vars map[string]string) (string, error) {
 // ${VAR} from earlier lines and vars; single-quoted values are literal.
 // Quoted values may span lines and may be followed by a # comment.
 func readEnvFile(file string, vars map[string]string) (map[string]string, error) {
-	data, err := os.ReadFile(file)
+	data, err := readCapped(file)
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +210,7 @@ func readEnvFile(file string, vars map[string]string) (map[string]string, error)
 		scope = map[string]string{}
 	}
 	out := map[string]string{}
+	total := 0 // bytes of values so far: they can name each other
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	for n := 0; n < len(lines); n++ {
 		at := n + 1
@@ -212,21 +232,23 @@ func readEnvFile(file string, vars map[string]string) (map[string]string, error)
 		}
 		v = strings.TrimLeft(v, " \t")
 		if v != "" && (v[0] == '"' || v[0] == '\'') {
-			q, body := v[0], v[1:]
-			for {
-				end := closingQuote(body, q)
-				if end >= 0 {
-					if rest := strings.TrimSpace(body[end+1:]); rest != "" && rest[0] != '#' {
-						return nil, fmt.Errorf("%s:%d: unexpected text after the closing quote", file, at)
-					}
-					body = body[:end]
-					break
-				}
+			// Each line is scanned once (an escape never spans a line break) and the
+			// value joined once: re-scanning a growing body made it quadratic.
+			q, parts := v[0], []string{v[1:]}
+			end := closingQuote(parts[0], q)
+			for end < 0 {
 				if n++; n == len(lines) {
 					return nil, fmt.Errorf("%s:%d: unterminated quoted value", file, at)
 				}
-				body += "\n" + lines[n]
+				parts = append(parts, lines[n])
+				end = closingQuote(lines[n], q)
 			}
+			last := parts[len(parts)-1]
+			if rest := strings.TrimSpace(last[end+1:]); rest != "" && rest[0] != '#' {
+				return nil, fmt.Errorf("%s:%d: unexpected text after the closing quote", file, at)
+			}
+			parts[len(parts)-1] = last[:end]
+			body := strings.Join(parts, "\n")
 			if q == '\'' {
 				out[k], scope[k] = body, body
 				continue
@@ -240,6 +262,9 @@ func readEnvFile(file string, vars map[string]string) (map[string]string, error)
 		v, err := expand(v, scope)
 		if err != nil {
 			return nil, fmt.Errorf("%s:%d: %w", file, at, err)
+		}
+		if total += len(v); total > maxBytes {
+			return nil, fmt.Errorf("%s:%d: %w", file, at, errTooBig)
 		}
 		out[k], scope[k] = v, v
 	}

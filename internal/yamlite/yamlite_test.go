@@ -2,9 +2,12 @@ package yamlite
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 type m = map[string]any
@@ -136,4 +139,65 @@ func FuzzParse(f *testing.F) {
 			t.Fatalf("tree does not marshal: %v", err)
 		}
 	})
+}
+
+// Input from a project file the operator wrote, but a typo or a generated file
+// must not crash serve: Go's stack overflow cannot be recovered.
+func TestNestingDeeperThanTheLimitIsAnError(t *testing.T) {
+	for name, in := range map[string]string{
+		"flow":  strings.Repeat("[", 100_000) + strings.Repeat("]", 100_000),
+		"block": strings.Repeat("- ", 2_000) + "x\n",
+	} {
+		_, err := Parse([]byte(in))
+		var e *Error
+		if !errors.As(err, &e) || !strings.Contains(e.Msg, "nesting deeper than 1000") {
+			t.Errorf("%s: err = %v, want the depth limit", name, err)
+		}
+	}
+}
+
+func TestNestingWithinTheLimitStillParses(t *testing.T) {
+	in := "a:\n" + strings.Repeat(" ", 2) + strings.Repeat("[", 50) + "1" + strings.Repeat("]", 50) + "\n"
+	if _, err := Parse([]byte(in)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAnUnterminatedQuoteFailsFast(t *testing.T) {
+	in := "a: \"open\n" + strings.Repeat("line\n", 200_000)
+	start := time.Now()
+	_, err := Parse([]byte(in))
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("took %v: the continuation scan is quadratic", d)
+	}
+}
+
+// One anchor per node: a chain of them recursed once per anchor, past the depth limit.
+func TestAChainOfAnchorsIsAnError(t *testing.T) {
+	_, err := Parse([]byte("a: " + strings.Repeat("&a ", 2000) + "x\n"))
+	if err == nil || !strings.Contains(err.Error(), "one anchor") {
+		t.Fatalf("err = %v", err)
+	}
+	if v, err := Parse([]byte("a: &x 1\nb: *x\n")); err != nil || v.(map[string]any)["b"] != int64(1) && v.(map[string]any)["b"] != 1 && fmt.Sprint(v.(map[string]any)["b"]) != "1" {
+		t.Fatalf("single anchor: %v, %v", v, err)
+	}
+}
+
+// Lines holding only escaped quotes cannot end the string: they must not cost a re-parse each.
+func TestEscapedQuotesInAContinuationStayLinear(t *testing.T) {
+	in := "a: \"start\n" + strings.Repeat("x \\\" y\n", 40_000) + "end\"\n"
+	start := time.Now()
+	v, err := Parse([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("took %v", d)
+	}
+	if s := v.(map[string]any)["a"].(string); !strings.HasPrefix(s, "start") || !strings.HasSuffix(s, "end") {
+		t.Fatalf("value = %.40q…", s)
+	}
 }

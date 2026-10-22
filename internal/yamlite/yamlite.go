@@ -38,11 +38,19 @@ type line struct {
 	tab    bool   // indented with a tab: fine inside a block scalar, an error anywhere else
 }
 
+// maxDepth caps nesting, block and flow alike: the parser recurses per level,
+// and running out of stack is a fatal error recover cannot catch. Real compose
+// files nest a handful of levels.
+const maxDepth = 1000
+
+const errDeep = "nesting deeper than 1000 levels"
+
 type parser struct {
 	lines   []line
 	i       int
 	anchors map[string]any
 	open    bool // the last line ends the file without a line break
+	depth   int  // block nodes open right now
 }
 
 // Parse reads one YAML document.
@@ -142,6 +150,10 @@ func isComplexKey(text string) bool { return text == "?" || strings.HasPrefix(te
 // indented exactly ind.
 func (p *parser) node(ind int) (any, error) {
 	l := p.lines[p.i]
+	if p.depth++; p.depth > maxDepth {
+		return nil, p.errAt(l, l.indent, errDeep)
+	}
+	defer func() { p.depth-- }()
 	switch {
 	case isItem(l.text):
 		return p.seq(ind)
@@ -318,6 +330,9 @@ func (p *parser) value(s string, col, parent int, mapVal bool) (any, error) {
 		if name == "" {
 			return nil, p.errAt(l, col, "anchor needs a name")
 		}
+		if strings.HasPrefix(strings.TrimLeft(rest, " "), "&") { // and each one would recurse
+			return nil, p.errAt(l, col, "only one anchor per node")
+		}
 		v, err := p.value(rest, col+1+len(name), parent, mapVal)
 		if err != nil {
 			return nil, err
@@ -349,8 +364,24 @@ func (p *parser) value(s string, col, parent int, mapVal bool) (any, error) {
 		start, s := p.i, t
 		str, n, err := quoted(s)
 		for errors.Is(err, errUnterminated) && p.i+1 < len(p.lines) {
-			p.i++
-			s += "\n" + p.lines[p.i].raw
+			// Only a line with an unescaped closing quote can end the string
+			// (an escape never spans a line break): jump to it and parse once,
+			// so a long or unterminated scalar costs one pass, not one per line.
+			j := p.i + 1
+			for j < len(p.lines) && !endsQuote(p.lines[j].raw, t[0]) {
+				j++
+			}
+			if j == len(p.lines) {
+				break
+			}
+			var b strings.Builder
+			b.WriteString(s)
+			for p.i < j {
+				p.i++
+				b.WriteByte('\n')
+				b.WriteString(p.lines[p.i].raw)
+			}
+			s = b.String()
 			str, n, err = quoted(s)
 		}
 		if err != nil {
@@ -619,6 +650,7 @@ type flow struct {
 	s       string
 	i       int
 	anchors map[string]any
+	depth   int // collections open right now
 }
 
 func (f *flow) space() {
@@ -634,6 +666,10 @@ func (f *flow) value() (any, error) {
 	if f.i == len(f.s) {
 		return nil, errors.New("unexpected end of flow collection")
 	}
+	if f.depth++; f.depth > maxDepth {
+		return nil, errors.New(errDeep)
+	}
+	defer func() { f.depth-- }()
 	switch f.s[f.i] {
 	case '[':
 		f.i++
@@ -880,4 +916,22 @@ func number(t string) (json.Number, bool) {
 		return json.Number(t), true
 	}
 	return "", false
+}
+
+// endsQuote reports whether line holds a quote q that is not escaped: \" in
+// double quotes, ” in single quotes. The scan starts fresh on each line.
+func endsQuote(line string, q byte) bool {
+	for i := 0; i < len(line); i++ {
+		switch {
+		case q == '"' && line[i] == '\\':
+			i++
+		case line[i] == q:
+			if q == '\'' && i+1 < len(line) && line[i+1] == '\'' {
+				i++
+				continue
+			}
+			return true
+		}
+	}
+	return false
 }

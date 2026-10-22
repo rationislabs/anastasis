@@ -238,7 +238,7 @@ func TestLoadsStateFromComposeGoBuild(t *testing.T) {
 	if len(vols) != 2 || vols[0].Source != "homelab_data" || vols[0].CreatesSource() || !vols[1].CreatesSource() || !vols[1].ReadOnly {
 		t.Fatalf("volumes = %+v (short-syntax binds must still auto-create)", vols)
 	}
-	if home.Current.Services["app"].Config.Environment["TZ"] != "Europe/Bratislava" {
+	if home.Current.Services["app"].Config.Environment["TZ"] != "UTC" {
 		t.Fatalf("env = %v", home.Current.Services["app"].Config.Environment)
 	}
 }

@@ -1,12 +1,15 @@
 package lb
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -265,5 +268,128 @@ func TestSkipEntriesExpire(t *testing.T) {
 	defer s.mu.Unlock()
 	if _, ok := s.skip["gone"]; ok || len(s.skip) != 1 {
 		t.Fatalf("skip = %v, want only b", s.skip)
+	}
+}
+
+// A client that sends its body a byte at a time holds a slot (and counts as
+// in flight for the autoscaler) until the read timeout cuts it off.
+func TestAStalledBodyIsCutOff(t *testing.T) {
+	old := readTimeout
+	readTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { readTimeout = old })
+	_, portStr, _ := net.SplitHostPort(freeAddr(t))
+	var port int
+	fmt.Sscan(portStr, &port)
+	l := New("127.0.0.1")
+	defer l.Shutdown()
+	s := NewService("web", false)
+	s.SetBackends([]Backend{backend(t, "a", nil, 0)})
+	if err := l.Listen("p/web", port, s); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\nx")
+	// Then nothing: a stalled body is cut once no byte came for readTimeout.
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, err = io.ReadAll(conn) // returns once the server gives up on the body and closes
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatal("a body with no byte for 3 s was still being waited for")
+	}
+}
+
+// The read timeout is for request bodies, not for upgraded connections: a
+// WebSocket through the balancer stays open past it.
+func TestAnUpgradedConnectionOutlivesTheReadTimeout(t *testing.T) {
+	old := readTimeout
+	readTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { readTimeout = old })
+	echo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, rw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: echo\r\nConnection: Upgrade\r\n\r\n")
+		rw.Flush()
+		io.Copy(conn, rw)
+	}))
+	t.Cleanup(echo.Close)
+	_, portStr, _ := net.SplitHostPort(freeAddr(t))
+	var port int
+	fmt.Sscan(portStr, &port)
+	l := New("127.0.0.1")
+	defer l.Shutdown()
+	s := NewService("web", false)
+	s.SetBackends([]Backend{{ID: "e", Addr: strings.TrimPrefix(echo.URL, "http://")}})
+	if err := l.Listen("p/web", port, s); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "GET / HTTP/1.1\r\nHost: x\r\nUpgrade: echo\r\nConnection: Upgrade\r\n\r\n")
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil || resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("upgrade: %v %v", resp, err)
+	}
+	time.Sleep(3 * readTimeout)
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, 4)
+	if _, err := io.ReadFull(br, got); err != nil || string(got) != "ping" {
+		t.Fatalf("after the read timeout: %q, %v", got, err)
+	}
+}
+
+// The timeout is for a stalled body, not a long one: a steady upload longer than the
+// timeout still arrives.
+func TestASteadyUploadOutlivesTheReadTimeout(t *testing.T) {
+	old := readTimeout
+	readTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { readTimeout = old })
+	got := make(chan int, 1)
+	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, _ := io.Copy(io.Discard, r.Body)
+		got <- int(n)
+	}))
+	t.Cleanup(sink.Close)
+	_, portStr, _ := net.SplitHostPort(freeAddr(t))
+	var port int
+	fmt.Sscan(portStr, &port)
+	l := New("127.0.0.1")
+	defer l.Shutdown()
+	s := NewService("web", false)
+	s.SetBackends([]Backend{{ID: "s", Addr: strings.TrimPrefix(sink.URL, "http://")}})
+	if err := l.Listen("p/web", port, s); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\n")
+	for i := 0; i < 10; i++ { // 1 s in all, never more than 100 ms between bytes
+		time.Sleep(100 * time.Millisecond)
+		if _, err := conn.Write([]byte("x")); err != nil {
+			t.Fatalf("cut off after %d bytes: %v", i, err)
+		}
+	}
+	select {
+	case n := <-got:
+		if n != 10 {
+			t.Fatalf("backend got %d bytes", n)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the upload never reached the backend")
 	}
 }
