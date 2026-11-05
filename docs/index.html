@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anastasis: container orchestration on rootless Podman</title>
+<meta name="description" content="Anastasis keeps your services running on rootless Podman: replicas, self-healing, rolling updates and autoscaling, in one binary with one JSON project file.">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="bar">
+  <nav aria-label="Site">
+    <a class="home" href="./" aria-current="page"><img src="logo.svg" alt="Anastasis home" width="132" height="32"></a>
+    <a href="guide.html">Guide</a>
+    <a href="reference.html">Reference</a>
+    <a href="https://github.com/rationislabs/anastasis">GitHub</a>
+  </nav>
+</header>
+
+<main id="main">
+<h1>Container orchestration on rootless&nbsp;Podman</h1>
+<p class="lede">Anastasis keeps your services running at the size you asked for. It replaces replicas
+that die, balances traffic across them, rolls out updates without downtime and scales on load.
+One binary, one JSON project file, no root daemon, no cluster.</p>
+<p class="note">The name is Greek: <span lang="grc">ἀνάστασις</span>, resurrection. What dies comes
+back.</p>
+
+<figure class="status">
+<pre><span class="dim">$ anastasis status</span>
+PROJECT  SERVICE  READY  OUTDATED  PORT  AUTO  STATE
+weather  web      <span class="cycle"><span class="s1" aria-hidden="true">3/3</span><span class="s2 bad" aria-hidden="true">2/3</span><span class="s3">3/3</span></span>    0         8000  -     <span class="cycle"><span class="s1 ok" aria-hidden="true">ok</span><span class="s2 bad" aria-hidden="true">starting</span><span class="s3 ok">ok</span></span></pre>
+<figcaption>A replica dies. Anastasis starts a new one and puts it back behind port 8000 when its
+healthcheck passes.</figcaption>
+</figure>
+
+<h2 id="fixes">What it fixes</h2>
+<dl class="fixes">
+  <dt>Replicas behind one port</dt>
+  <dd>Run several copies of a service. A built-in HTTP load balancer follows every replica as it
+  comes and goes.
+<pre><code>"deploy": { "replicas": 3 },
+"x-anastasis": { "expose": "8000:8080" }</code></pre></dd>
+
+  <dt>Self-healing</dt>
+  <dd>Exited or unhealthy replicas are replaced. A service that keeps crashing backs off, from 1
+  second doubling up to 5 minutes.
+<pre><code>"healthcheck": { "test": ["CMD", "wget", "-qO-", "http://localhost:8080/health"],
+                 "interval": "5s" }</code></pre></dd>
+
+  <dt>Rolling updates without downtime</dt>
+  <dd>Change the file and run <code>up</code>. New replicas start before old ones stop; if they
+  fail, the rollout pauses or rolls back.
+<pre><code>"image": "ghcr.io/rationislabs/weather-live-dashboard:1.5.0"
+$ anastasis up</code></pre></dd>
+
+  <dt>Autoscaling</dt>
+  <dd>Scale on concurrent requests, CPU, or both. Scaling up starts within about 15 seconds;
+  scaling down waits for 5 quiet minutes.
+<pre><code>"autoscale": { "min": 1, "max": 6, "inflight": 10, "cpu": 70 }</code></pre></dd>
+</dl>
+
+<h2 id="start">Run it</h2>
+<p>A project is a Compose-shaped JSON file. This one runs three replicas of a web app behind port
+8000:</p>
+<pre><code>{
+  "name": "weather",
+  "services": {
+    "web": {
+      "image": "ghcr.io/rationislabs/weather-live-dashboard:1.4.0",
+      "healthcheck": {
+        "test": ["CMD", "wget", "-qO-", "http://localhost:8080/health"],
+        "interval": "5s"
+      },
+      "deploy": { "replicas": 3 },
+      "x-anastasis": { "expose": "8000:8080", "sticky": true }
+    }
+  }
+}</code></pre>
+<p>Save it as <code>compose.json</code>, then:</p>
+<pre class="term"><code>anastasis up                 <span class="dim"># waits until every replica is ready</span>
+anastasis status
+curl http://localhost:8000/</code></pre>
+<p>The <a href="guide.html#install">guide</a> covers installing Anastasis and Podman first. Existing
+<code>compose.yaml</code> files load too, as long as they use the
+<a href="reference.html#service">supported keys</a>.</p>
+
+<h2 id="not">What it is not</h2>
+<ul class="not">
+  <li><strong>Not Kubernetes.</strong> No cluster, no control plane, no API objects. One machine,
+  one process under your user.</li>
+  <li><strong>Not multi-host.</strong> Anastasis runs the services of one machine.</li>
+  <li><strong>Not for every engine.</strong> It runs on rootless Podman 4 or newer, over Podman's
+  API socket.</li>
+  <li><strong>Not a general proxy.</strong> The load balancer speaks HTTP, round-robin over ready
+  replicas.</li>
+  <li><strong>Not for scaling state.</strong> Services that keep data in a local volume stay at one
+  replica.</li>
+</ul>
+</main>
+
+<footer>
+  <p>Anastasis is open source under the Apache License 2.0.
+  <a href="https://github.com/rationislabs/anastasis">Source on GitHub</a>.</p>
+</footer>
+</body>
+</html>

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 132 32" width="132" height="32" role="img" aria-labelledby="t">
+  <title id="t">Anastasis</title>
+  <style>
+    text { font: 800 26px system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif; letter-spacing: -0.6px; fill: #16201d; }
+    @media (prefers-color-scheme: dark) { text { fill: #e2e9e6; } }
+  </style>
+  <text x="0" y="25">anastasis</text>
+</svg>
