@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reference: Anastasis</title>
+<meta name="description" content="Every compose.json key Anastasis accepts or refuses, the x-anastasis keys, and every command and flag.">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="bar">
+  <nav aria-label="Site">
+    <a class="home" href="./"><img src="logo.svg" alt="Anastasis home" width="132" height="32"></a>
+    <a href="guide.html">Guide</a>
+    <a href="reference.html" aria-current="page">Reference</a>
+    <a href="https://github.com/rationislabs/anastasis">GitHub</a>
+  </nav>
+</header>
+
+<main id="main">
+<h1>Reference</h1>
+<p class="lede">The project file keys Anastasis understands, the ones it refuses, and its
+commands.</p>
+<nav aria-label="On this page">
+<ul class="toc">
+  <li><a href="#project">Top level</a></li>
+  <li><a href="#service">Service keys</a></li>
+  <li><a href="#healthcheck">healthcheck</a></li>
+  <li><a href="#ports">ports</a></li>
+  <li><a href="#volumes">volumes</a></li>
+  <li><a href="#deploy">deploy</a></li>
+  <li><a href="#x-anastasis">x-anastasis</a></li>
+  <li><a href="#refused">Refused keys</a></li>
+  <li><a href="#cli">Commands</a></li>
+</ul>
+</nav>
+<p>A project file is JSON (<code>compose.json</code>) or YAML (<code>compose.yaml</code>) in the shape
+of the <a href="https://compose-spec.io">Compose specification</a>. Strings may use
+<code>${VAR}</code> and the other Compose variable forms. A key that is not listed here is an error:
+Anastasis never runs a file differently than it is written. Durations are Compose durations such as
+<code>5s</code> or <code>1m30s</code>.</p>
+
+<h2 id="project">Top level</h2>
+<div class="scroll"><table>
+<thead><tr><th scope="col">Key</th><th scope="col">Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>name</code></td><td>Project name. <code>COMPOSE_PROJECT_NAME</code> wins over it; without
+either, the directory name is used. Lowercase letters, digits, <code>-</code> and
+<code>_</code>.</td></tr>
+<tr><td><code>services</code></td><td>The services, by name.</td></tr>
+<tr><td><code>volumes</code></td><td>Named volumes the services use; see <a href="#named-volumes">named
+volumes</a>.</td></tr>
+<tr><td><code>networks</code></td><td>Accepted; every project gets one network, so only
+<code>default</code> may be named.</td></tr>
+<tr><td><code>version</code></td><td>Accepted and ignored, as in Compose.</td></tr>
+<tr><td><code>x-…</code></td><td>Any key starting with <code>x-</code> is ignored, so it can hold
+shared values.</td></tr>
+</tbody>
+</table></div>
+
+<h3 id="named-volumes">Named volumes</h3>
+<div class="scroll"><table>
+<thead><tr><th scope="col">Key</th><th scope="col">Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>name</code></td><td>The volume's real name. Default: <code><var>project</var>_<var>key</var></code>.</td></tr>
+<tr><td><code>external</code></td><td><code>true</code>: the volume exists already, is never deleted,
+and may be shared between projects. Its name defaults to the key.</td></tr>
+<tr><td><code>driver</code></td><td>Only <code>local</code>.</td></tr>
+<tr><td><code>labels</code></td><td>Accepted and ignored.</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="service">Service keys</h2>
+<div class="scroll"><table>
+<thead><tr><th scope="col">Key</th><th scope="col">Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>image</code></td><td>Required. Use the fully qualified name, with the registry.</td></tr>
+<tr><td><code>command</code></td><td>A string or a list.</td></tr>
+<tr><td><code>entrypoint</code></td><td>A string or a list.</td></tr>
+<tr><td><code>environment</code></td><td>A mapping or a list of <code>KEY=value</code>. A bare
+<code>KEY</code> takes its value from your environment, or is left out.</td></tr>
+<tr><td><code>env_file</code></td><td>A path, a list of paths, or a list of
+<code>{"path": …, "required": false}</code> (<code>path</code>, <code>required</code>). Files load in
+order; <code>environment</code> wins.</td></tr>
+<tr><td><code>volumes</code></td><td>Mounts; see <a href="#volumes">volumes</a>.</td></tr>
+<tr><td><code>healthcheck</code></td><td>See <a href="#healthcheck">healthcheck</a>.</td></tr>
+<tr><td><code>labels</code></td><td>A mapping or a list.</td></tr>
+<tr><td><code>user</code></td><td>User inside the container.</td></tr>
+<tr><td><code>working_dir</code></td><td>Working directory inside the container.</td></tr>
+<tr><td><code>stop_signal</code></td><td>Signal that stops a replica.</td></tr>
+<tr><td><code>stop_grace_period</code></td><td>Time between that signal and a kill. Default
+<code>10s</code>.</td></tr>
+<tr><td><code>cap_add</code></td><td>Passed to Podman as written.</td></tr>
+<tr><td><code>cap_drop</code></td><td>Passed to Podman as written.</td></tr>
+<tr><td><code>read_only</code></td><td>Read-only root filesystem.</td></tr>
+<tr><td><code>deploy</code></td><td>See <a href="#deploy">deploy</a>.</td></tr>
+<tr><td><code>ports</code></td><td>Publishes ports directly; see <a href="#ports">ports</a>. Only for a
+single replica.</td></tr>
+<tr><td><code>networks</code></td><td>Only <code>default</code>.</td></tr>
+<tr><td><code>depends_on</code></td><td>Accepted and ignored: Anastasis retries until dependencies
+are up. The names must still be services of the project.</td></tr>
+<tr><td><code>restart</code></td><td>Accepted; Anastasis keeps every service running.
+<code>"no"</code> and <code>on-failure</code> are refused.</td></tr>
+<tr><td><code>container_name</code></td><td>Accepted and ignored: Anastasis names replicas
+itself.</td></tr>
+<tr><td><code>name</code></td><td>Accepted and ignored.</td></tr>
+<tr><td><code>x-anastasis</code></td><td>See <a href="#x-anastasis">x-anastasis</a>.</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="healthcheck">healthcheck</h2>
+<div class="scroll"><table>
+<thead><tr><th scope="col">Key</th><th scope="col">Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>test</code></td><td>A list such as <code>["CMD", "wget", "-qO-", "http://localhost:8080/health"]</code>,
+or a string, which runs in a shell.</td></tr>
+<tr><td><code>interval</code></td><td>Time between checks.</td></tr>
+<tr><td><code>timeout</code></td><td>A check that takes longer fails.</td></tr>
+<tr><td><code>start_period</code></td><td>Failures during this time after start do not count.</td></tr>
+<tr><td><code>retries</code></td><td>Failures in a row before a replica is unhealthy and
+replaced.</td></tr>
+<tr><td><code>disable</code></td><td>Turn off the image's own healthcheck.</td></tr>
+<tr><td><code>start_interval</code></td><td>Accepted and ignored.</td></tr>
+</tbody>
+</table></div>
+<p>A replica only gets traffic once its healthcheck passes. Without a healthcheck it counts as ready
+when it starts.</p>
+
+<h2 id="ports">ports</h2>
+<p>Short form <code>[[host_ip:]published:]target[/protocol]</code>, such as <code>"8080:80"</code>, or
+the long form below. A service with <code>ports</code> runs one replica and updates with
+<code>stop-first</code>; to scale, use <a href="#x-anastasis"><code>expose</code></a>. Port ranges are
+refused.</p>
+<div class="scroll"><table>
+<thead><tr><th scope="col">Key</th><th scope="col">Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>target</code></td><td>Container port, required.</td></tr>
+<tr><td><code>published</code></td><td>Host port.</td></tr>
+<tr><td><code>host_ip</code></td><td>Host address to bind.</td></tr>
+<tr><td><code>protocol</code></td><td><code>tcp</code> (default), <code>udp</code> or <code>sctp</code>.</td></tr>
+<tr><td><code>mode</code></td><td>Accepted and ignored.</td></tr>
+<tr><td><code>name</code></td><td>Accepted and ignored.</td></tr>
+<tr><td><code>app_protocol</code></td><td>Accepted and ignored.</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="volumes">volumes</h2>
+<p>Short form <code>[source:]target[:mode]</code>. A source that is a path (<code>./data</code>,
+<code>/srv/data</code>, <code>~/data</code>) is a bind mount; any other source is a
+<a href="#named-volumes">named volume</a>, which must be declared at the top level. No source makes an
+anonymous volume, which belongs to one replica and is deleted with it. Relative paths are relative to
+the project file.</p>
+<div class="scroll"><table>
+<thead><tr><th scope="col">Key</th><th scope="col">Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>type</code></td><td><code>bind</code>, <code>volume</code> or <code>tmpfs</code>.</td></tr>
+<tr><td><code>source</code></td><td>Host path or volume name. Required for a bind mount.</td></tr>
+<tr><td><code>target</code></td><td>Absolute path in the container.</td></tr>
+<tr><td><code>read_only</code></td><td>Mount read-only.</td></tr>
+<tr><td><code>bind</code></td><td><code>selinux</code> (<code>z</code> or <code>Z</code>) and
+<code>create_host_path</code>. <code>propagation</code> and <code>recursive</code> are
+refused.</td></tr>
+<tr><td><code>volume</code></td><td><code>nocopy</code> and <code>subpath</code> are refused.</td></tr>
+<tr><td><code>tmpfs</code></td><td>Refused: tmpfs options are not supported. A plain
+<code>type: tmpfs</code> works.</td></tr>
+<tr><td><code>consistency</code></td><td>Accepted and ignored.</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="deploy">deploy</h2>
+<div class="scroll"><table>
+<thead><tr><th scope="col">Key</th><th scope="col">Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>replicas</code></td><td>How many replicas to run. Default 1. With autoscaling, the
+starting count.</td></tr>
+<tr><td><code>resources</code></td><td><code>limits</code>: <code>cpus</code> (such as
+<code>"0.5"</code>) and <code>memory</code> (such as <code>"256m"</code>). <code>reservations</code>
+is accepted and ignored.</td></tr>
+<tr><td><code>update_config</code></td><td>How rollouts run; see below.</td></tr>
+<tr><td><code>restart_policy</code></td><td>Accepted; <code>condition</code> <code>none</code> and
+<code>on-failure</code> are refused.</td></tr>
+<tr><td><code>mode</code></td><td>Only <code>replicated</code>.</td></tr>
+<tr><td><code>labels</code></td><td>Accepted and ignored.</td></tr>
+<tr><td><code>endpoint_mode</code>, <code>placement</code>, <code>rollback_config</code></td><td>Refused;
+see <a href="#refused">refused keys</a>.</td></tr>
+</tbody>
+</table></div>
+
+<h3 id="update-config">update_config</h3>
+<div class="scroll"><table>
+<thead><tr><th scope="col">Key</th><th scope="col">Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>parallelism</code></td><td>Replicas replaced at a time. Default 1; 0 means all at
+once.</td></tr>
+<tr><td><code>delay</code></td><td>Wait between batches.</td></tr>
+<tr><td><code>monitor</code></td><td>How long new replicas must survive. Default
+<code>30s</code>.</td></tr>
+<tr><td><code>order</code></td><td><code>start-first</code> (default) or <code>stop-first</code>
+(default with <code>ports</code>, the only order <code>ports</code> allows).</td></tr>
+<tr><td><code>failure_action</code></td><td><code>pause</code> (default), <code>rollback</code> or
+<code>continue</code>.</td></tr>
+<tr><td><code>max_failure_ratio</code></td><td>Refused unless 0.</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="x-anastasis">x-anastasis</h2>
+<p>A service-level block for what Compose has no keys for.</p>
+<div class="scroll"><table>
+<thead><tr><th scope="col">Key</th><th scope="col">Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>expose</code></td><td><code>"hostPort:containerPort"</code>, such as
+<code>"8000:8080"</code>: the HTTP load balancer on the host port, forwarding to that port of every
+ready replica.</td></tr>
+<tr><td><code>sticky</code></td><td><code>true</code> keeps each browser on one replica. Needs
+<code>expose</code>.</td></tr>
+<tr><td><code>autoscale</code></td><td>See below.</td></tr>
+</tbody>
+</table></div>
+
+<h3 id="autoscale">autoscale</h3>
+<div class="scroll"><table>
+<thead><tr><th scope="col">Key</th><th scope="col">Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>max</code></td><td>Required, at least 1.</td></tr>
+<tr><td><code>min</code></td><td>At least 1; defaults to <code>deploy.replicas</code>. Scaling to
+zero is not supported.</td></tr>
+<tr><td><code>inflight</code></td><td>Target concurrent requests per replica. Needs
+<code>expose</code>.</td></tr>
+<tr><td><code>cpu</code></td><td>Target percent of the CPU limit per replica. Needs
+<code>deploy.resources.limits.cpus</code>.</td></tr>
+</tbody>
+</table></div>
+<p>Set <code>inflight</code>, <code>cpu</code>, or both; the higher replica count wins. A service with
+<code>ports</code> cannot autoscale.</p>
+
+<h2 id="refused">Refused keys</h2>
+<p>Anastasis stops with an error on these instead of running something you did not write.</p>
+<div class="scroll"><table>
+<thead><tr><th scope="col">Key</th><th scope="col">Why, and what to do instead</th></tr></thead>
+<tbody>
+<tr><td><code>build</code></td><td>Anastasis does not build images. Push an image and set
+<code>image</code>.</td></tr>
+<tr><td><code>network_mode</code>, custom <code>networks</code></td><td>Every project gets one network;
+services reach each other by name.</td></tr>
+<tr><td><code>restart: "no"</code>, <code>restart: on-failure</code></td><td>Every service is kept
+running. Run one-shot jobs with <code>podman run</code>.</td></tr>
+<tr><td><code>privileged</code>, <code>devices</code>, <code>pid</code></td><td>Not supported, along with
+any service key not listed under <a href="#service">service keys</a>.</td></tr>
+<tr><td><code>endpoint_mode</code>, <code>placement</code>, <code>mode: global</code></td><td>Swarm-only:
+there is one host.</td></tr>
+<tr><td><code>rollback_config</code></td><td>Use <code>update_config.failure_action: rollback</code>.</td></tr>
+<tr><td><code>max_failure_ratio</code></td><td>Not supported; leave it out or set it to 0.</td></tr>
+<tr><td><code>propagation</code>, <code>recursive</code></td><td>Bind propagation options are not
+supported.</td></tr>
+<tr><td><code>nocopy</code>, <code>subpath</code></td><td>Volume options are not supported.</td></tr>
+<tr><td><code>tmpfs</code> options</td><td>Use a plain <code>type: tmpfs</code> mount.</td></tr>
+<tr><td>Port ranges</td><td>Publish each port on its own.</td></tr>
+<tr><td>Volume drivers other than <code>local</code></td><td>Anastasis uses Podman's local
+volumes.</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="cli">Commands</h2>
+<div class="scroll"><table>
+<thead><tr><th scope="col">Command</th><th scope="col">What it does</th></tr></thead>
+<tbody>
+<tr><td><code>anastasis serve</code></td><td>Runs Anastasis: the loop that keeps services at their
+size, and the API socket the other commands talk to. Usually started by the systemd user
+unit.</td></tr>
+<tr><td><code>anastasis up</code></td><td>Registers or updates the project and waits, up to 5
+minutes, until it converges.</td></tr>
+<tr><td><code>anastasis down <var>project</var></code></td><td>Removes the project's containers and
+network.</td></tr>
+<tr><td><code>anastasis scale <var>project</var> <var>service</var>=<var>n</var> …</code></td><td>Sets
+replica counts until the next <code>up</code>. Refuses autoscaled services.</td></tr>
+<tr><td><code>anastasis status [<var>project</var>]</code></td><td>Shows every service, or one
+project's.</td></tr>
+<tr><td><code>anastasis rollout restart <var>project</var> <var>service</var></code></td><td>Rolls every
+replica and pulls the image again.</td></tr>
+<tr><td><code>anastasis version</code></td><td>Prints the version.</td></tr>
+</tbody>
+</table></div>
+
+<h3 id="flags">Flags</h3>
+<div class="scroll"><table>
+<thead><tr><th scope="col">Flag</th><th scope="col">Command</th><th scope="col">Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>-socket <var>path</var></code></td><td>all, before the command</td><td>API socket.
+Default <code>$XDG_RUNTIME_DIR/anastasis.sock</code>.</td></tr>
+<tr><td><code>-f <var>file</var></code></td><td><code>up</code></td><td>Project file. Default
+<code>compose.json</code>, else <code>compose.yaml</code>, else <code>compose.yml</code>.</td></tr>
+<tr><td><code>-d</code></td><td><code>up</code></td><td>Return at once and print the project
+name.</td></tr>
+<tr><td><code>--volumes</code></td><td><code>down</code></td><td>Also remove the project's named
+volumes, never external ones.</td></tr>
+<tr><td><code>-state <var>path</var></code></td><td><code>serve</code></td><td>State file. Default
+<code>~/.local/share/anastasis/state.json</code>.</td></tr>
+<tr><td><code>-runtime <var>path</var></code></td><td><code>serve</code></td><td>Podman API socket.
+Default <code>$XDG_RUNTIME_DIR/podman/podman.sock</code>.</td></tr>
+</tbody>
+</table></div>
+</main>
+
+<footer>
+  <p>Anastasis is open source under the Apache License 2.0.
+  <a href="https://github.com/rationislabs/anastasis">Source on GitHub</a>.</p>
+</footer>
+</body>
+</html>
