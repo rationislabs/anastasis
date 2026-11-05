@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guide: Anastasis</title>
+<meta name="description" content="Install Anastasis, run a first project, and learn how it heals, scales and updates your services.">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="bar">
+  <nav aria-label="Site">
+    <a class="home" href="./"><img src="logo.svg" alt="Anastasis home" width="132" height="32"></a>
+    <a href="guide.html" aria-current="page">Guide</a>
+    <a href="reference.html">Reference</a>
+    <a href="https://github.com/rationislabs/anastasis">GitHub</a>
+  </nav>
+</header>
+
+<main id="main">
+<h1>Guide</h1>
+<p class="lede">From an empty machine to services that heal, scale and update themselves.</p>
+<nav aria-label="On this page">
+<ul class="toc">
+  <li><a href="#install">Install</a></li>
+  <li><a href="#first">A first project</a></li>
+  <li><a href="#up">How <code>up</code> converges</a></li>
+  <li><a href="#status">Status and scaling</a></li>
+  <li><a href="#healing">Self-healing</a></li>
+  <li><a href="#updates">Rolling updates and rollback</a></li>
+  <li><a href="#autoscaling">Autoscaling</a></li>
+  <li><a href="#volumes">Volumes and data</a></li>
+  <li><a href="#upgrade">Upgrading Anastasis</a></li>
+  <li><a href="#trouble">Troubleshooting</a></li>
+</ul>
+</nav>
+
+<h2 id="install">Install</h2>
+<p>You need Linux, rootless Podman 4 or newer, a systemd user session, and Go 1.27.3 or newer to
+build the binary. Anastasis has no other dependencies.</p>
+<pre class="term"><code>GOBIN=~/.local/bin go install github.com/rationislabs/anastasis/cmd/anastasis@latest
+systemctl --user enable --now podman.socket</code></pre>
+<p>Run Anastasis as a systemd user service, so it starts with your session and restarts if it
+stops. Save this unit as <code>~/.config/systemd/user/anastasis.service</code> (it is
+<code>contrib/anastasis.service</code> in the repository):</p>
+<pre id="unit"><code>[Unit]
+Description=anastasis container orchestrator
+Requires=podman.socket
+After=podman.socket
+
+[Service]
+ExecStart=%h/.local/bin/anastasis serve
+Restart=always
+RestartSec=1
+# A user unit: it runs as you, so User= does not apply. No ProtectHome or
+# ProtectSystem: anastasis reads compose files and creates bind-mount
+# sources wherever a project keeps them.
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+RestrictNamespaces=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=default.target
+</code></pre>
+<pre class="term"><code>systemctl --user enable --now anastasis
+sudo loginctl enable-linger "$USER"   <span class="dim"># keep running after logout; healthchecks need it too</span></code></pre>
+<p>If Anastasis stops, your containers keep running. When it starts again it adopts them instead
+of starting new ones.</p>
+
+<h2 id="first">A first project</h2>
+<p>A project is a directory with a <code>compose.json</code>. It follows the shape of the
+<a href="https://compose-spec.io">Compose specification</a>, plus an <code>x-anastasis</code> block
+for what Compose has no words for:</p>
+<pre><code>{
+  "name": "weather",
+  "services": {
+    "web": {
+      "image": "ghcr.io/rationislabs/weather-live-dashboard:1.4.0",
+      "healthcheck": {
+        "test": ["CMD", "wget", "-qO-", "http://localhost:8080/health"],
+        "interval": "5s"
+      },
+      "deploy": {
+        "replicas": 3,
+        "update_config": { "parallelism": 1, "delay": "5s" }
+      },
+      "x-anastasis": {
+        "expose": "8000:8080",
+        "sticky": true
+      }
+    }
+  }
+}</code></pre>
+<ul>
+  <li><code>expose</code> puts the load balancer on host port 8000, forwarding to container port
+  8080 of every ready replica.</li>
+  <li><code>sticky</code> keeps each browser on one replica. Apps that keep sessions in memory need
+  this; if that replica dies, the session is lost.</li>
+  <li>Use fully qualified image names (<code>docker.io/library/nginx</code>, not
+  <code>nginx</code>): Podman may refuse to guess the registry.</li>
+</ul>
+<pre class="term"><code>cd weather
+anastasis up
+anastasis status</code></pre>
+<p>YAML works too: an existing <code>compose.yaml</code> loads as long as it uses the
+<a href="reference.html#service">supported keys</a>. Anything Anastasis cannot run is an error,
+never silently ignored.</p>
+
+<h2 id="up">How <code>up</code> converges</h2>
+<p><code>anastasis up</code> reads <code>compose.json</code> in the current directory (else
+<code>compose.yaml</code>, else <code>compose.yml</code>; <code>-f</code> picks another file) and hands
+it to the running service. Then it waits, for up to 5 minutes, until every service has its replicas
+ready, and prints the status. It exits with an error if a rollout pauses or rolls back.
+<code>up -d</code> returns at once and prints the project name.</p>
+<ul>
+  <li><strong>Project name:</strong> <code>COMPOSE_PROJECT_NAME</code> if set, else the top-level
+  <code>name</code>, else the directory name, lowercased.</li>
+  <li><strong>One name, one directory.</strong> A project registered from one directory cannot be
+  brought up from another. Give two projects different <code>name</code> keys, or run
+  <code>anastasis down</code> before moving one. Another file in the same directory is the same
+  project, so <code>compose.yaml</code> can become <code>compose.json</code> with a plain
+  <code>up</code>.</li>
+  <li><strong>Variables:</strong> <code>${VAR}</code>, <code>${VAR:-default}</code> and the other
+  Compose forms take their values from your environment and from a <code>.env</code> file next to
+  the project file; the environment wins.</li>
+  <li>Running <code>up</code> again with a changed file updates only the services whose config
+  changed.</li>
+</ul>
+
+<h2 id="status">Status and scaling</h2>
+<pre class="term"><code>$ anastasis status
+PROJECT  SERVICE  READY  OUTDATED  PORT  AUTO  STATE
+weather  web      3/3    0         8000  -     ok</code></pre>
+<ul>
+  <li><strong>READY</strong> is ready replicas over the replicas wanted; <strong>OUTDATED</strong>
+  counts replicas still on an old config during a rollout.</li>
+  <li><strong>STATE</strong> is <code>ok</code>, <code>starting</code>, <code>rolling out</code>,
+  <code>crash backoff until …</code>, <code>paused: …</code> or <code>error: …</code>.</li>
+  <li>Warnings follow the table, for example when healthchecks cannot run.</li>
+</ul>
+<pre class="term"><code>anastasis scale weather web=5       <span class="dim"># lasts until the next up</span>
+anastasis down weather              <span class="dim"># remove containers and network</span>
+anastasis down weather --volumes    <span class="dim"># and the project's named volumes</span></code></pre>
+<p>Only stateless services scale. A service that keeps state in a local volume (SQLite, files)
+must stay at one replica.</p>
+
+<h2 id="healing">Self-healing</h2>
+<ul>
+  <li>Exited and unhealthy replicas are replaced.</li>
+  <li>A replica that dies within 30 seconds of starting puts the service in crash backoff: 1 second,
+  doubling up to 5 minutes. Replicas that died while Anastasis was not running, such as during a
+  reboot, are replaced without backoff.</li>
+  <li>A replica whose healthcheck gives no result for <code>interval</code> + <code>timeout</code>
+  stops getting traffic, and is replaced after <code>retries</code> such periods. Podman 4.9 never
+  times out a hung check by itself.</li>
+  <li>Replicas without a healthcheck count as ready as soon as they start.</li>
+</ul>
+
+<h2 id="updates">Rolling updates and rollback</h2>
+<p>A rollout starts when a service's config changes and you run <code>up</code>. Anastasis
+defaults to <code>order: start-first</code>, unlike Compose's <code>stop-first</code>: a new
+replica starts and becomes ready before an old one stops, so even a single-replica service updates
+without downtime.</p>
+<pre><code>"deploy": {
+  "update_config": {
+    "parallelism": 1,
+    "delay": "5s",
+    "monitor": "30s",
+    "failure_action": "rollback"
+  }
+}</code></pre>
+<p>If new replicas fail within <code>monitor</code> (default 30 seconds),
+<code>failure_action</code> decides:</p>
+<ul>
+  <li><code>pause</code> (default): the rollout stops, and the old replicas that are left keep
+  serving. Fix the file and run <code>up</code> again.</li>
+  <li><code>rollback</code>: the old config comes back.</li>
+  <li><code>continue</code>: the rollout carries on.</li>
+</ul>
+<p><code>anastasis rollout restart weather web</code> rolls every replica the same way and pulls
+the image again, for a moving tag such as <code>latest</code>.</p>
+<p><code>ports:</code> still works for single-replica services, which then update with
+<code>stop-first</code> and a short outage. Use <code>x-anastasis.expose</code> to scale and to
+update without downtime.</p>
+
+<h2 id="autoscaling">Autoscaling</h2>
+<pre><code>"deploy": {
+  "replicas": 2,
+  "resources": { "limits": { "cpus": "0.5" } }
+},
+"x-anastasis": {
+  "expose": "8000:8080",
+  "autoscale": { "min": 1, "max": 6, "inflight": 10, "cpu": 70 }
+}</code></pre>
+<p><code>replicas</code> is the starting count, and the floor when <code>min</code> is left out.
+<code>inflight</code> is the target number of concurrent requests per replica; <code>cpu</code> the
+target percent of the CPU limit per replica.</p>
+<ul>
+  <li>Anastasis works out a replica count from each signal (ready replicas × observed ÷ target,
+  rounded up) and uses the higher one, within <code>min</code> and <code>max</code>.</li>
+  <li>Scaling up starts within about 15 seconds, plus the time new replicas take to become ready.
+  Scaling down waits until the load has been lower for 5 minutes, then removes one replica per
+  minute.</li>
+  <li>Missing data never scales down.</li>
+  <li><code>cpu</code> needs <code>deploy.resources.limits.cpus</code>, and on rootless Podman
+  cgroup v2. On cgroup v1 the CPU signal is unavailable and <code>anastasis status</code> says
+  so.</li>
+  <li><code>inflight</code> needs <code>x-anastasis.expose</code>: only the load balancer counts
+  requests. A WebSocket or server-sent-events connection counts for as long as it stays open, so
+  scale live dashboards on <code>cpu</code>.</li>
+  <li><code>anastasis scale</code> refuses autoscaled services: change <code>min</code> or
+  <code>max</code> in the file and run <code>up</code>.</li>
+  <li>The <strong>AUTO</strong> column shows each decision, for example
+  <code>2→4 (inflight 14.0/10, cpu 55/70)</code>.</li>
+</ul>
+
+<h2 id="volumes">Volumes and data</h2>
+<ul>
+  <li><strong>Keep state in named volumes or bind mounts.</strong> Anonymous volumes (an image's
+  <code>VOLUME</code>, such as redis <code>/data</code>, or a volume entry without a source) belong
+  to one replica and are deleted with it. Every replacement, rollout or scale-down starts them
+  empty. Compose keeps them across a recreate; Anastasis does not.</li>
+  <li><code>down --volumes</code> removes the project's named volumes, never
+  <code>external</code> ones.</li>
+  <li>A volume belongs to one project: <code>up</code> refuses a project that names another
+  project's volume. To share one, mark it <code>"external": true</code> in both projects.</li>
+  <li><strong>A project file is trusted like a script.</strong> Bind mounts of any host path and
+  <code>cap_add</code> are passed to Podman as written. Rootless Podman limits them to what your
+  user can do, but a bind mount of your home directory can still read your files.
+  <code>privileged</code>, <code>devices</code> and <code>pid</code> are refused.</li>
+</ul>
+
+<h2 id="upgrade">Upgrading Anastasis</h2>
+<pre class="term"><code>GOBIN=~/.local/bin go install github.com/rationislabs/anastasis/cmd/anastasis@latest
+systemctl --user restart anastasis</code></pre>
+<p>Containers keep running while Anastasis restarts, and the new binary adopts them.</p>
+
+<h2 id="trouble">Troubleshooting</h2>
+<dl>
+  <dt><strong>Replicas stay <code>starting</code> and never get traffic</strong></dt>
+  <dd>Healthchecks on rootless Podman need a systemd user session. Run
+  <code>sudo loginctl enable-linger "$USER"</code>. <code>anastasis status</code> warns about
+  this.</dd>
+  <dt><strong>The load balancer cannot bind a port below 1024</strong></dt>
+  <dd>Allow unprivileged ports with <code>sysctl net.ipv4.ip_unprivileged_port_start=80</code> (or
+  lower). Anastasis does not change it for you.</dd>
+  <dt><strong>Podman refuses the image name</strong></dt>
+  <dd>Use the fully qualified name, with the registry: <code>docker.io/library/nginx</code>.</dd>
+  <dt><strong><code>up</code> says the project belongs to another directory</strong></dt>
+  <dd>See <a href="#up">one name, one directory</a>.</dd>
+  <dt><strong>A key is “not supported”</strong></dt>
+  <dd>Anastasis refuses what it cannot run instead of ignoring it. The
+  <a href="reference.html#refused">reference</a> lists each refused key and what to do
+  instead.</dd>
+</dl>
+</main>
+
+<footer>
+  <p>Anastasis is open source under the Apache License 2.0.
+  <a href="https://github.com/rationislabs/anastasis">Source on GitHub</a>.</p>
+</footer>
+</body>
+</html>
