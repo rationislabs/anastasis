@@ -206,3 +206,5 @@ shape; the loader that reads them is Anastasis's own.
 ## License
 
 Apache License 2.0; see [LICENSE](LICENSE).
+
+This project was built with AI assistance.
